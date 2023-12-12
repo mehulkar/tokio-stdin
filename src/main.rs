@@ -1,67 +1,58 @@
+use std::vec;
+
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{self, Duration};
 
 #[tokio::main]
 async fn main() {
-    // Spawn a child process
-    let mut child = Command::new("bash")
-        .arg("src/request-input.sh")
+    let mut stdin_mgr = Command::new("cat")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("Failed to start child process");
+        .expect("stdin manager start");
 
-    // Get a handle to the child process's stdin
-    let mut child_stdin = child.stdin.take().expect("Failed to get child stdin");
+    let mut task_one = Command::new("npm")
+        .args(vec!["run", "start"])
+        .stdout(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .expect("t1 start");
 
-    // Get a handle to the child process's stdout
-    let child_stdout = child.stdout.take().expect("Failed to get child stdout");
+    let mut task_two = Command::new("npm")
+        .args(vec!["run", "dev"])
+        .stdout(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .expect("t2 start");
 
-    // Use Tokio to read lines from the child process's stdout asynchronously
-    let reader = BufReader::new(child_stdout);
-    tokio::spawn(read_child_output(reader));
+    let mut stdin_mgr_stdin = stdin_mgr.stdin.take().expect("stdin mgr stdin");
 
-    // Use Tokio to read lines from stdin and send them to the child process
-    let stdin = io::stdin();
-    let mut lines = io::BufReader::new(stdin).lines();
+    // Get a handle to each process's stdout and stdin
+    // Read and print stdout
+    let t1_stdout = task_one.stdout.take().expect("t1 stdout");
+    let t2_stdout = task_two.stdout.take().expect("t2 stdout");
+    let mgr_stdout = stdin_mgr.stdout.take().expect("mgr stdout");
+    tokio::spawn(read_child_output(BufReader::new(t1_stdout), "t1"));
+    tokio::spawn(read_child_output(BufReader::new(t2_stdout), "t2"));
+    tokio::spawn(read_child_output(BufReader::new(mgr_stdout), "mgr"));
 
-    while let Some(line) = lines.next_line().await.unwrap() {
-        println!("app-a:build: requesting input");
-        print!("app-a:build: {}", line.trim());
-        // Send the input line to the child process
-        child_stdin
-            .write_all(line.as_bytes())
-            .await
-            .expect("Failed to write to child stdin");
-        child_stdin
-            .write_all(b"\n")
-            .await
-            .expect("Failed to write newline to child stdin");
+    // Use Tokio to read lines from stdin and send them to the stdin manager
+    let mut in_reader = io::BufReader::new(io::stdin()).lines();
+
+    while let Some(line) = in_reader.next_line().await.unwrap() {
+        stdin_mgr_stdin.write_all(line.as_bytes()).await.expect("");
+        stdin_mgr_stdin.write_all(b"\n").await.expect("");
     }
-
-    // Keep the parent process alive for some time
-    time::sleep(Duration::from_secs(5)).await;
-
-    // Send an interrupt signal to the child process
-    child.kill().await.expect("Failed to kill child process");
-
-    // Wait for the child process to exit
-    let status = child
-        .wait()
-        .await
-        .expect("Failed to wait for child process");
-    println!("Child process exited with: {:?}", status);
 }
 
-async fn read_child_output(mut reader: BufReader<tokio::process::ChildStdout>) {
+async fn read_child_output(mut reader: BufReader<tokio::process::ChildStdout>, prefix: &str) {
     let mut line = String::new();
     while let Ok(n) = reader.read_line(&mut line).await {
+        // End of file reached
         if n == 0 {
-            // End of file reached
             break;
         }
-        print!("{}", line);
+        print!("{}: {}", prefix, line);
         line.clear();
     }
 }
