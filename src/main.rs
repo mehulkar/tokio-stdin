@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::sync::Arc;
 use std::vec;
 
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -14,14 +15,19 @@ async fn main() {
         .expect("stdin manager start");
 
     let t0_stdout = t0.stdout.take().expect("mgr stdout");
-    let mut t0_stdin = t0.stdin.take().expect("stdin mgr stdin");
-
     tokio::spawn(read_child_output(BufReader::new(t0_stdout), "mgr"));
 
     // create a mutex guard around the stdin manager's stdin stream
-    let mutex = Mutex::new(&t0_stdin);
-    let mut t1 = spawn_task("t1", "npm", vec!["run", "build-a"], &mutex);
-    let mut t2 = spawn_task("t2", "npm", vec!["run", "build-b"], &mutex);
+    let mut t0_stdin = t0.stdin.take().expect("stdin mgr stdin");
+    let mutex = Arc::new(Mutex::new(&t0_stdin));
+
+    tokio::spawn(async move {
+        spawn_task("t1", "npm", vec!["run", "build-a"], &mutex);
+    });
+
+    tokio::spawn(async move {
+        spawn_task("t2", "npm", vec!["run", "build-b"], &mutex);
+    });
 
     // Read lines from stdin and send them to the stdin manager
     let mut in_reader = io::BufReader::new(io::stdin()).lines();
@@ -29,10 +35,6 @@ async fn main() {
         t0_stdin.write_all(line.as_bytes()).await.expect("");
         t0_stdin.write_all(b"\n").await.expect("");
     }
-
-    t0.wait().await.unwrap();
-    t1.await.wait().await.unwrap();
-    t2.await.wait().await.unwrap();
 }
 
 async fn spawn_task(
