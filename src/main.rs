@@ -47,23 +47,20 @@ async fn spawn_task(
     let xx = *locked_stdin;
     let yy = *xx;
 
-    println!("spawn_task: {} has the lock!", name);
+    let mut cmd = Command::new(program);
+    cmd.args(args.clone());
+    cmd.stdout(Stdio::piped());
+    cmd.stdin(yy);
+    let haha = cmd.spawn().expect(format!("{} to start", name).as_str());
 
-    let mut cmd = Command::new(program)
-        .args(args.clone())
-        .stdout(Stdio::piped())
-        .stdin(yy)
-        .spawn()
-        .expect(format!("{} to start", name).as_str());
-
-    let stdout = cmd
+    let stdout = haha
         .stdout
         .take()
         .expect(format!("{} stdout", name).as_str());
 
     tokio::spawn(read_child_output(BufReader::new(stdout), "t1"));
 
-    cmd
+    haha
 }
 
 async fn read_child_output(mut reader: BufReader<tokio::process::ChildStdout>, prefix: &str) {
